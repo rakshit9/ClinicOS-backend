@@ -1,0 +1,61 @@
+### Register
+POST http://localhost:8000/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "Dr Jane Smith",
+  "email": "jane@example.com",
+  "password": "Str0ng!Pass123"
+}
+
+### Login
+POST http://localhost:8000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "jane@example.com",
+  "password": "Str0ng!Pass123"
+}
+
+### Me (requires Bearer token)
+GET http://localhost:8000/api/auth/me
+Authorization: Bearer {{access_token}}
+
+### Refresh Token
+POST http://localhost:8000/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refresh_token}}"
+}
+
+### Forgot Password
+POST http://localhost:8000/api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "jane@example.com"
+}
+
+### Reset Password (use token from email)
+POST http://localhost:8000/api/auth/reset-password
+Content-Type: application/json
+
+{
+  "token": "{{reset_token}}",
+  "newPassword": "N3w!StrongPass456"
+}
+
+### Logout
+POST http://localhost:8000/api/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refresh_token}}"
+}
+
+### Health Check
+GET http://localhost:8000/health
+
+### Health Check (HEAD)
+HEAD http://localhost:8000/health

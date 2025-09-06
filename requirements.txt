@@ -1,0 +1,13 @@
+fastapi==0.115.*
+uvicorn[standard]==0.30.*
+motor==3.*
+pydantic==2.*
+python-dotenv==1.*
+passlib[bcrypt]==1.*
+PyJWT==2.*
+fastapi-mail==1.*
+slowapi==0.1.*
+loguru==0.7.*
+black==24.*
+ruff==0.5.*
+isort==5.*
