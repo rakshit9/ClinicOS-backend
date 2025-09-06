@@ -32,36 +32,46 @@ def generate_jti() -> str:
 
 def sign_access_token(user_id: str, role: str) -> str:
     """Sign an access token."""
+    now = datetime.utcnow()
     payload = {
         "sub": user_id,
         "role": role,
         "type": "access",
-        "iat": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(seconds=settings.jwt_access_lifetime_seconds)
+        "iat": now,
+        "exp": now + timedelta(seconds=settings.jwt_access_expires_seconds)
     }
     
-    return jwt.encode(payload, settings.jwt_access_secret, algorithm="HS256")
+    return jwt.encode(
+        payload,
+        settings.jwt_access_secret,
+        algorithm="HS256"
+    )
 
 
 def sign_refresh_token(user_id: str, jti: str) -> str:
     """Sign a refresh token."""
+    now = datetime.utcnow()
     payload = {
         "sub": user_id,
         "jti": jti,
         "type": "refresh",
-        "iat": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(seconds=settings.jwt_refresh_lifetime_seconds)
+        "iat": now,
+        "exp": now + timedelta(seconds=settings.jwt_refresh_expires_seconds)
     }
     
-    return jwt.encode(payload, settings.jwt_refresh_secret, algorithm="HS256")
+    return jwt.encode(
+        payload,
+        settings.jwt_refresh_secret,
+        algorithm="HS256"
+    )
 
 
 def verify_access_token(token: str) -> Dict:
-    """Verify and decode an access token."""
+    """Verify an access token."""
     try:
         payload = jwt.decode(
-            token, 
-            settings.jwt_access_secret, 
+            token,
+            settings.jwt_access_secret,
             algorithms=["HS256"]
         )
         
@@ -69,19 +79,18 @@ def verify_access_token(token: str) -> Dict:
             raise InvalidTokenError("Invalid token type")
         
         return payload
-        
     except jwt.ExpiredSignatureError:
-        raise TokenExpiredError("Access token has expired")
+        raise TokenExpiredError("Token has expired")
     except jwt.InvalidTokenError:
-        raise InvalidTokenError("Invalid access token")
+        raise InvalidTokenError("Invalid token")
 
 
 def verify_refresh_token(token: str) -> Dict:
-    """Verify and decode a refresh token."""
+    """Verify a refresh token."""
     try:
         payload = jwt.decode(
-            token, 
-            settings.jwt_refresh_secret, 
+            token,
+            settings.jwt_refresh_secret,
             algorithms=["HS256"]
         )
         
@@ -89,18 +98,20 @@ def verify_refresh_token(token: str) -> Dict:
             raise InvalidTokenError("Invalid token type")
         
         return payload
-        
     except jwt.ExpiredSignatureError:
-        raise TokenExpiredError("Refresh token has expired")
+        raise TokenExpiredError("Token has expired")
     except jwt.InvalidTokenError:
-        raise InvalidTokenError("Invalid refresh token")
+        raise InvalidTokenError("Invalid token")
 
 
 def get_jti_from_token(token: str) -> Optional[str]:
     """Extract JTI from a refresh token without verification."""
     try:
         # Decode without verification to get JTI
-        payload = jwt.decode(token, options={"verify_signature": False})
+        payload = jwt.decode(
+            token,
+            options={"verify_signature": False}
+        )
         return payload.get("jti")
     except jwt.InvalidTokenError:
         return None

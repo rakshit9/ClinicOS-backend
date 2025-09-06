@@ -1,28 +1,72 @@
-"""User data models."""
+"""User SQLAlchemy model and Pydantic schemas."""
 
 from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+from sqlalchemy import Boolean, CheckConstraint, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
-class UserInDB(BaseModel):
-    """User document as stored in database."""
+class User(UUIDMixin, TimestampMixin, Base):
+    """User model."""
     
-    id: Optional[str] = Field(None, alias="_id")
-    email: str = Field(..., description="User email address")
-    password_hash: str = Field(..., description="Hashed password")
-    name: str = Field(..., description="User full name")
-    role: Literal["doctor", "admin"] = Field(default="doctor", description="User role")
-    verified: bool = Field(default=False, description="Email verification status")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    __tablename__ = "users"
     
-    class Config:
-        populate_by_name = True
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    email: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        index=True
+    )
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False
+    )
+    name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False
+    )
+    role: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="doctor"
+    )
+    verified: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False
+    )
+    
+    __table_args__ = (
+        CheckConstraint("role IN ('doctor', 'admin')", name="check_role"),
+        UniqueConstraint("email", name="uq_users_email"),
+    )
+    
+    # Relationships
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        "RefreshToken", 
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    reset_tokens: Mapped[list["ResetToken"]] = relationship(
+        "ResetToken", 
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    
+    def to_public(self) -> "UserOut":
+        """Convert to public user representation."""
+        return UserOut(
+            id=self.id,
+            email=self.email,
+            name=self.name,
+            role=self.role,
+            verified=self.verified,
+            created_at=self.created_at
+        )
 
 
 class UserCreate(BaseModel):

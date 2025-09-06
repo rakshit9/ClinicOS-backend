@@ -1,6 +1,6 @@
 """Authentication request/response schemas."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -13,6 +13,7 @@ class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="User full name")
     email: str = Field(..., description="User email address")
     password: str = Field(..., min_length=8, description="User password")
+    role: Literal["doctor", "admin"] = Field(default="doctor", description="User role")
 
 
 class LoginRequest(BaseModel):

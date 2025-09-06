@@ -1,1 +1,1 @@
-"""Schema definitions package."""
+"""Schemas package."""

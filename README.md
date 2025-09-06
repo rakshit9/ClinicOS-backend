@@ -1,48 +1,61 @@
 # Clinic Auth API
 
-A production-ready FastAPI authentication API with JWT tokens, MongoDB, and comprehensive security features.
+A production-ready FastAPI authentication service for clinic management systems, built with SQLite and SQLAlchemy 2.0 async.
 
-## 🚀 Features
+## Features
 
-- **FastAPI** with async/await support
-- **JWT Authentication** with access (15m) and refresh (7d) tokens
-- **Token Rotation** and revocation
-- **Password Reset** with email notifications
-- **MongoDB** with Motor async driver
-- **Rate Limiting** with SlowAPI
-- **Security Headers** and CORS protection
-- **Structured Logging** with Loguru
-- **Input Validation** with Pydantic v2
-- **Docker Compose** for development
-- **Comprehensive Error Handling**
+- **JWT Authentication**: Access tokens (15m) and rotating refresh tokens (7d)
+- **Password Security**: bcrypt hashing with secure password requirements
+- **Email Integration**: Password reset via email (console logging in dev, SMTP in prod)
+- **Rate Limiting**: Global and auth-specific rate limits with SlowAPI
+- **Security Headers**: Comprehensive security middleware
+- **Database**: SQLite with SQLAlchemy 2.0 async (aiosqlite)
+- **Validation**: Pydantic v2 for request/response validation
+- **Error Handling**: Structured error responses with proper HTTP codes
+- **CORS**: Configurable cross-origin resource sharing
 
-## 📋 Requirements
+## Tech Stack
 
-- Python 3.11+
-- MongoDB 7.0+
-- Docker & Docker Compose (for development)
+- **Framework**: FastAPI 0.115+
+- **Database**: SQLite with aiosqlite driver
+- **ORM**: SQLAlchemy 2.0 async
+- **Authentication**: JWT with PyJWT
+- **Password Hashing**: passlib with bcrypt
+- **Email**: fastapi-mail
+- **Rate Limiting**: SlowAPI
+- **Validation**: Pydantic v2
+- **Logging**: Loguru
+- **Code Quality**: Black, Ruff, isort, mypy
 
-## 🛠️ Quick Start
+## Quick Start
 
 ### 1. Clone and Setup
 
 ```bash
 git clone <repository-url>
 cd clinic-auth-api
-cp env.example .env
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
+### 2. Environment Configuration
 
-Edit `.env` file with your settings:
+Copy the example environment file and configure:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your settings:
 
 ```env
 APP_NAME=clinic-auth-api
 APP_URL=http://localhost:8000
 PORT=8000
-MONGO_URI=mongodb://localhost:27017/clinic_auth
-JWT_ACCESS_SECRET=your-super-secret-access-key
-JWT_REFRESH_SECRET=your-super-secret-refresh-key
+DATABASE_URL=sqlite+aiosqlite:///./data/clinic_auth.db
+JWT_ACCESS_SECRET=your_super_secret_access_key
+JWT_REFRESH_SECRET=your_super_secret_refresh_key
 JWT_ACCESS_EXPIRES=15m
 JWT_REFRESH_EXPIRES=7d
 RESET_TOKEN_EXPIRES_MIN=30
@@ -55,232 +68,178 @@ MAIL_PASSWORD=
 MAIL_TLS=True
 ```
 
-### 3. Start Database
+### 3. Run the Application
 
 ```bash
-# Using Makefile
-make db-up
-
-# Or manually
-docker-compose up -d mongodb mongo-express
-```
-
-### 4. Install Dependencies
-
-```bash
-# Using Makefile
-make install
-
-# Or manually
-pip install -r requirements.txt
-```
-
-### 5. Start Development Server
-
-```bash
-# Using Makefile
+# Development server
 make dev
-
-# Or manually
+# or
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Production server
+make run
+# or
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 6. Test the API
+### 4. Test the API
 
-The API will be available at `http://localhost:8000`
+Visit the interactive API documentation:
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
-- **API Documentation**: `http://localhost:8000/docs`
-- **Health Check**: `http://localhost:8000/health`
-- **Mongo Express**: `http://localhost:8081` (admin/admin)
+Or use the provided test requests in `tests/requests.http`.
 
-## 📚 API Endpoints
+## API Endpoints
 
 ### Authentication
 
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| POST | `/api/auth/register` | Register new user | No |
-| POST | `/api/auth/login` | Login user | No |
-| POST | `/api/auth/refresh` | Refresh access token | No |
-| POST | `/api/auth/logout` | Logout user | No |
-| GET | `/api/auth/me` | Get current user | Yes |
-| POST | `/api/auth/forgot-password` | Request password reset | No |
-| POST | `/api/auth/reset-password` | Reset password | No |
+| Method | Endpoint | Description | Rate Limit |
+|--------|----------|-------------|------------|
+| POST | `/api/auth/register` | Register new user | Global |
+| POST | `/api/auth/login` | Login user | Auth (10/min) |
+| POST | `/api/auth/refresh` | Refresh access token | Global |
+| POST | `/api/auth/logout` | Logout user | Global |
+| GET | `/api/auth/me` | Get current user | Global |
+| POST | `/api/auth/forgot-password` | Send reset email | Auth (10/min) |
+| POST | `/api/auth/reset-password` | Reset password | Global |
 
-### System
+### Health Check
 
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| GET | `/health` | Health check | No |
-| HEAD | `/health` | Health check (HEAD) | No |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/HEAD | `/health` | Service health status |
 
-## 🧪 Testing
+## Database Schema
 
-Use the provided `tests/requests.http` file with VS Code REST Client extension:
+### Users Table
+- `id`: UUID4 primary key
+- `email`: Unique email address (lowercase)
+- `password_hash`: bcrypt hashed password
+- `name`: User's full name
+- `role`: 'doctor' or 'admin' (default: 'doctor')
+- `verified`: Email verification status
+- `created_at`, `updated_at`: Timestamps
 
-```http
-### Register
-POST http://localhost:8000/api/auth/register
-Content-Type: application/json
+### Refresh Tokens Table
+- `id`: UUID4 primary key
+- `user_id`: Foreign key to users
+- `jti`: Unique JWT ID
+- `token_hash`: SHA256 hash of refresh token
+- `user_agent`, `ip`: Client information
+- `revoked`: Token revocation status
+- `expires_at`: Token expiration
+- `created_at`: Creation timestamp
 
-{
-  "name": "Dr Jane Smith",
-  "email": "jane@example.com",
-  "password": "Str0ng!Pass123"
-}
-```
+### Reset Tokens Table
+- `id`: UUID4 primary key
+- `user_id`: Foreign key to users
+- `token_hash`: SHA256 hash of reset token
+- `expires_at`: Token expiration
+- `created_at`: Creation timestamp
 
-## 🏗️ Project Structure
+## Security Features
 
-```
-clinic-auth-api/
-├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI app
-│   ├── config.py               # Settings
-│   ├── db.py                   # Database connection
-│   ├── deps.py                 # Dependencies
-│   ├── models/                 # Data models
-│   │   ├── user.py
-│   │   └── token.py
-│   ├── repositories/           # Database operations
-│   │   ├── user_repo.py
-│   │   ├── token_repo.py
-│   │   └── reset_repo.py
-│   ├── schemas/                # Request/Response schemas
-│   │   ├── auth.py
-│   │   └── user.py
-│   ├── services/               # Business logic
-│   │   ├── auth_service.py
-│   │   ├── jwt_service.py
-│   │   ├── email_service.py
-│   │   └── crypto_service.py
-│   ├── routes/                 # API routes
-│   │   └── auth_routes.py
-│   ├── middleware/             # Custom middleware
-│   │   ├── errors.py
-│   │   └── security_headers.py
-│   └── utils/                  # Utilities
-│       └── responses.py
-├── tests/
-│   └── requests.http           # API test examples
-├── docker-compose.yml          # Database services
-├── mongo-init.js              # MongoDB initialization
-├── requirements.txt           # Dependencies
-├── pyproject.toml            # Project configuration
-├── Makefile                  # Development commands
-├── env.example               # Environment template
-└── README.md                 # This file
-```
+### JWT Tokens
+- **Access Token**: 15 minutes, contains user ID and role
+- **Refresh Token**: 7 days, contains user ID and JTI
+- **Rotation**: New refresh token issued on each refresh
+- **Revocation**: Tokens can be revoked and are checked against database
 
-## 🔧 Development Commands
+### Password Security
+- Minimum 8 characters
+- bcrypt hashing with salt
+- Secure password requirements (letters, numbers, symbols)
+
+### Rate Limiting
+- **Global**: 100 requests per 15 minutes per IP
+- **Auth endpoints**: 10 requests per minute per IP
+- Headers include rate limit information
+
+### Security Headers
+- X-Frame-Options: DENY
+- X-Content-Type-Options: nosniff
+- X-XSS-Protection: 1; mode=block
+- Referrer-Policy: strict-origin-when-cross-origin
+- Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+## Development
+
+### Code Quality
 
 ```bash
-# Install dependencies
-make install
-
-# Start development server
-make dev
-
-# Start database services
-make db-up
-
-# Stop all services
-make stop
-
-# Clean up containers
-make clean
+# Format code
+make format
 
 # Run linting
 make lint
 
-# Format code
-make format
-
-# Run all checks
-make check
+# Clean up
+make clean
 ```
 
-## 🔒 Security Features
+### Testing
 
-- **JWT Tokens**: Access (15m) and refresh (7d) tokens
-- **Token Rotation**: New refresh token on each refresh
-- **Token Revocation**: Logout and password reset revoke tokens
-- **Password Hashing**: bcrypt with salt
-- **Rate Limiting**: Global and auth-specific limits
-- **Security Headers**: X-Frame-Options, X-Content-Type-Options, etc.
-- **CORS Protection**: Configurable origins
-- **Input Validation**: Pydantic v2 with comprehensive validation
-- **Error Handling**: Consistent error responses
-
-## 📊 Database Schema
-
-### Users Collection
-```json
-{
-  "_id": "ObjectId",
-  "email": "string (unique, lowercase)",
-  "password_hash": "string (bcrypt)",
-  "name": "string",
-  "role": "doctor|admin",
-  "verified": "boolean",
-  "created_at": "datetime",
-  "updated_at": "datetime"
-}
-```
-
-### Refresh Tokens Collection
-```json
-{
-  "_id": "ObjectId",
-  "user_id": "string",
-  "jti": "string (JWT ID)",
-  "token_hash": "string (SHA256)",
-  "user_agent": "string (optional)",
-  "ip_address": "string (optional)",
-  "revoked": "boolean",
-  "expires_at": "datetime (TTL index)",
-  "created_at": "datetime"
-}
-```
-
-### Reset Tokens Collection
-```json
-{
-  "_id": "ObjectId",
-  "user_id": "string",
-  "token_hash": "string (SHA256)",
-  "expires_at": "datetime (TTL index)",
-  "created_at": "datetime"
-}
-```
-
-## 🚀 Production Deployment
-
-1. **Environment Variables**: Set all required environment variables
-2. **Database**: Use MongoDB Atlas or self-hosted MongoDB
-3. **Email**: Configure SMTP settings for production
-4. **Security**: Use strong JWT secrets and HTTPS
-5. **Monitoring**: Add logging and monitoring
-6. **Scaling**: Use multiple workers with Gunicorn
+Use the provided HTTP requests file or test with curl:
 
 ```bash
-# Production server
-gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+# Register a user
+curl -X POST http://localhost:8000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Dr. Jane","email":"jane@example.com","password":"Str0ng!Pass123"}'
+
+# Login
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"jane@example.com","password":"Str0ng!Pass123"}'
 ```
 
-## 📝 License
+## Production Deployment
 
-MIT License - see LICENSE file for details.
+### Environment Variables
+Ensure all required environment variables are set, especially:
+- Strong JWT secrets
+- Proper CORS origins
+- SMTP configuration for email
 
-## 🤝 Contributing
+### Database
+The SQLite database will be created automatically in the `data/` directory. For production, consider:
+- Regular backups
+- Database optimization
+- Connection pooling
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and linting
-5. Submit a pull request
+### Security
+- Use HTTPS in production
+- Set strong JWT secrets
+- Configure proper CORS origins
+- Enable SMTP for email notifications
+- Monitor rate limiting
 
-## 📞 Support
+## Project Structure
 
-For support, email support@clinic.com or create an issue in the repository.
+```
+clinic-auth-api/
+├── app/
+│   ├── models/          # SQLAlchemy ORM models
+│   ├── repositories/    # Database CRUD operations
+│   ├── schemas/         # Pydantic request/response models
+│   ├── services/        # Business logic
+│   ├── routes/          # API endpoints
+│   ├── middleware/      # Custom middleware
+│   ├── utils/           # Utility functions
+│   ├── config.py        # Application configuration
+│   ├── db.py           # Database connection
+│   ├── deps.py         # FastAPI dependencies
+│   └── main.py         # FastAPI application
+├── tests/
+│   └── requests.http   # API test requests
+├── data/               # SQLite database directory
+├── requirements.txt    # Python dependencies
+├── .env.example       # Environment variables template
+├── Makefile           # Development commands
+└── README.md          # This file
+```
+
+## License
+
+This project is licensed under the MIT License.

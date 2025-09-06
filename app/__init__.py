@@ -1,1 +1,1 @@
-"""Clinic Auth API - FastAPI application package."""
+"""Clinic Auth API package."""

@@ -11,7 +11,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         """Add security headers to response."""
         response = await call_next(request)
         
-        # Security headers
+        # Add security headers
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -25,6 +25,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def setup_security_headers(app: FastAPI):
+def setup_security_headers(app: FastAPI) -> None:
     """Setup security headers middleware."""
     app.add_middleware(SecurityHeadersMiddleware)

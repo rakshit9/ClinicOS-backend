@@ -1,70 +1,90 @@
-"""Database connection and index management."""
+"""Database connection and session management."""
 
-from datetime import datetime, timedelta
+import os
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from pymongo import ASCENDING, IndexModel
+from loguru import logger
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from app.config import settings
+from app.models.base import Base
+
+# Create async engine
+engine = create_async_engine(
+    settings.database_url,
+    future=True,
+    echo=False,
+    # SQLite specific settings
+    poolclass=StaticPool,
+    connect_args={
+        "check_same_thread": False,
+    } if "sqlite" in settings.database_url else {},
+)
+
+# Create async session factory
+async_session = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
-class Database:
-    """Database connection manager."""
+async def init_db() -> None:
+    """Initialize database with tables and PRAGMAs."""
+    logger.info("🔧 Initializing database...")
     
-    client: AsyncIOMotorClient = None
-    database: AsyncIOMotorDatabase = None
+    # Set SQLite PRAGMAs for better performance and reliability
+    async with engine.begin() as conn:
+        if "sqlite" in settings.database_url:
+            await conn.execute(text("PRAGMA foreign_keys=ON"))
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA synchronous=NORMAL"))
+            await conn.execute(text("PRAGMA cache_size=1000"))
+            await conn.execute(text("PRAGMA temp_store=MEMORY"))
+            logger.info("✅ SQLite PRAGMAs configured")
+        
+        # Create all tables
+        await conn.run_sync(Base.metadata.create_all)
+        logger.info("✅ Database tables created")
+        
+        # Clean up expired tokens
+        await cleanup_expired_tokens(conn)
+        logger.info("✅ Expired tokens cleaned up")
 
 
-db = Database()
-
-
-async def get_database() -> AsyncIOMotorDatabase:
-    """Get database instance."""
-    return db.database
-
-
-async def connect_to_mongo():
-    """Create database connection."""
-    db.client = AsyncIOMotorClient(settings.mongo_uri)
-    db.database = db.client.get_default_database()
+async def cleanup_expired_tokens(conn) -> None:
+    """Clean up expired refresh and reset tokens."""
+    # Clean up expired refresh tokens
+    result = await conn.execute(
+        text("DELETE FROM refresh_tokens WHERE expires_at < datetime('now')")
+    )
+    logger.info(f"🗑️ Cleaned up {result.rowcount} expired refresh tokens")
     
-    # Ensure indexes
-    await ensure_indexes()
+    # Clean up expired reset tokens
+    result = await conn.execute(
+        text("DELETE FROM reset_tokens WHERE expires_at < datetime('now')")
+    )
+    logger.info(f"🗑️ Cleaned up {result.rowcount} expired reset tokens")
 
 
-async def close_mongo_connection():
-    """Close database connection."""
-    if db.client:
-        db.client.close()
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Get database session with automatic commit/rollback."""
+    async with async_session() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
 
-async def ensure_indexes():
-    """Create necessary database indexes."""
-    # Users collection indexes
-    users_collection = db.database.users
-    await users_collection.create_index(
-        [("email", ASCENDING)], 
-        unique=True, 
-        name="email_unique"
-    )
-    
-    # Refresh tokens collection indexes
-    refresh_tokens_collection = db.database.refresh_tokens
-    await refresh_tokens_collection.create_index(
-        [("user_id", ASCENDING), ("revoked", ASCENDING)],
-        name="user_revoked"
-    )
-    await refresh_tokens_collection.create_index(
-        [("expires_at", ASCENDING)],
-        expireAfterSeconds=0,  # TTL index
-        name="expires_at_ttl"
-    )
-    
-    # Reset tokens collection indexes
-    reset_tokens_collection = db.database.reset_tokens
-    await reset_tokens_collection.create_index(
-        [("expires_at", ASCENDING)],
-        expireAfterSeconds=0,  # TTL index
-        name="expires_at_ttl"
-    )
+async def close_db() -> None:
+    """Close database connections."""
+    logger.info("🛑 Closing database connections...")
+    await engine.dispose()
+    logger.info("✅ Database connections closed")

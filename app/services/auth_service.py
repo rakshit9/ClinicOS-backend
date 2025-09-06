@@ -4,13 +4,14 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from fastapi import HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.user import UserInDB
-from app.repositories.reset_repo import ResetRepository
-from app.repositories.token_repo import TokenRepository
+from app.models.user import User
+from app.repositories.refresh_repo import RefreshTokenRepository
+from app.repositories.reset_repo import ResetTokenRepository
 from app.repositories.user_repo import UserRepository
+from app.models.user import UserCreate
 from app.schemas.auth import (
     AuthResponse,
     ForgotPasswordRequest,
@@ -35,12 +36,12 @@ from app.services.jwt_service import (
 class AuthService:
     """Authentication service."""
     
-    def __init__(self, db: AsyncIOMotorDatabase):
+    def __init__(self, session: AsyncSession):
         """Initialize auth service."""
-        self.db = db
-        self.user_repo = UserRepository(db)
-        self.token_repo = TokenRepository(db)
-        self.reset_repo = ResetRepository(db)
+        self.session = session
+        self.user_repo = UserRepository(session)
+        self.refresh_repo = RefreshTokenRepository(session)
+        self.reset_repo = ResetTokenRepository(session)
     
     async def register(self, request: RegisterRequest) -> AuthResponse:
         """Register a new user."""
@@ -53,7 +54,13 @@ class AuthService:
             )
         
         # Create user
-        user = await self.user_repo.create_user(request)
+        user_data = UserCreate(
+            email=request.email,
+            password=request.password,
+            name=request.name,
+            role=request.role
+        )
+        user = await self.user_repo.create_user(user_data)
         
         # Generate tokens
         jti = generate_jti()
@@ -62,26 +69,28 @@ class AuthService:
         
         # Store refresh token
         token_hash = sha256_hex(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(seconds=settings.jwt_refresh_lifetime_seconds)
-        await self.token_repo.save_refresh_token(
+        expires_at = datetime.utcnow() + timedelta(seconds=settings.jwt_refresh_expires_seconds)
+        
+        await self.refresh_repo.save_refresh(
             user_id=str(user.id),
             jti=jti,
             token_hash=token_hash,
             expires_at=expires_at
         )
         
-        # Prepare response
-        user_out = self.user_repo.to_public(user)
-        tokens = TokensResponse(access=access_token, refresh=refresh_token)
-        
-        return AuthResponse(user=user_out, tokens=tokens)
+        return AuthResponse(
+            user=user.to_public(),
+            tokens=TokensResponse(
+                access=access_token,
+                refresh=refresh_token
+            )
+        )
     
     async def login(
         self, 
         request: LoginRequest, 
         user_agent: Optional[str] = None,
-        ip_address: Optional[str] = None,
-        previous_refresh_token: Optional[str] = None
+        ip: Optional[str] = None
     ) -> AuthResponse:
         """Login user."""
         # Find user
@@ -92,52 +101,47 @@ class AuthService:
                 detail="Invalid email or password"
             )
         
-        # Revoke previous refresh token if provided (optional rotation)
-        if previous_refresh_token:
-            try:
-                jti = get_jti_from_token(previous_refresh_token)
-                if jti:
-                    await self.token_repo.revoke_refresh_token(jti)
-            except Exception:
-                # Ignore invalid previous token
-                pass
-        
-        # Generate new tokens
+        # Generate tokens
         jti = generate_jti()
         access_token = sign_access_token(str(user.id), user.role)
         refresh_token = sign_refresh_token(str(user.id), jti)
         
-        # Store new refresh token
+        # Store refresh token
         token_hash = sha256_hex(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(seconds=settings.jwt_refresh_lifetime_seconds)
-        await self.token_repo.save_refresh_token(
+        expires_at = datetime.utcnow() + timedelta(seconds=settings.jwt_refresh_expires_seconds)
+        
+        await self.refresh_repo.save_refresh(
             user_id=str(user.id),
             jti=jti,
             token_hash=token_hash,
             user_agent=user_agent,
-            ip_address=ip_address,
+            ip=ip,
             expires_at=expires_at
         )
         
-        # Prepare response
-        user_out = self.user_repo.to_public(user)
-        tokens = TokensResponse(access=access_token, refresh=refresh_token)
-        
-        return AuthResponse(user=user_out, tokens=tokens)
+        return AuthResponse(
+            user=user.to_public(),
+            tokens=TokensResponse(
+                access=access_token,
+                refresh=refresh_token
+            )
+        )
     
     async def refresh(self, request: LogoutRequest) -> TokensResponse:
         """Refresh access token."""
         # Verify refresh token
         try:
             payload = verify_refresh_token(request.refreshToken)
+            user_id = payload["sub"]
+            jti = payload["jti"]
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid refresh token"
             )
         
-        # Get user
-        user = await self.user_repo.get_by_id(payload["sub"])
+        # Find user
+        user = await self.user_repo.get_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -146,8 +150,10 @@ class AuthService:
         
         # Verify token in database
         token_hash = sha256_hex(request.refreshToken)
-        stored_token = await self.token_repo.find_valid_by_jti_and_hash(
-            payload["jti"], token_hash
+        stored_token = await self.refresh_repo.find_valid(
+            jti=jti,
+            token_hash=token_hash,
+            now=datetime.utcnow()
         )
         
         if not stored_token:
@@ -157,7 +163,7 @@ class AuthService:
             )
         
         # Revoke old token
-        await self.token_repo.revoke_refresh_token(payload["jti"])
+        await self.refresh_repo.revoke(jti)
         
         # Generate new tokens
         new_jti = generate_jti()
@@ -166,24 +172,33 @@ class AuthService:
         
         # Store new refresh token
         new_token_hash = sha256_hex(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(seconds=settings.jwt_refresh_lifetime_seconds)
-        await self.token_repo.save_refresh_token(
+        expires_at = datetime.utcnow() + timedelta(seconds=settings.jwt_refresh_expires_seconds)
+        
+        await self.refresh_repo.save_refresh(
             user_id=str(user.id),
             jti=new_jti,
             token_hash=new_token_hash,
             user_agent=stored_token.user_agent,
-            ip_address=stored_token.ip_address,
+            ip=stored_token.ip,
             expires_at=expires_at
         )
         
-        return TokensResponse(access=access_token, refresh=refresh_token)
+        return TokensResponse(
+            access=access_token,
+            refresh=refresh_token
+        )
     
     async def logout(self, request: LogoutRequest) -> None:
         """Logout user."""
-        # Get JTI from token
-        jti = get_jti_from_token(request.refreshToken)
-        if jti:
-            await self.token_repo.revoke_refresh_token(jti)
+        try:
+            payload = verify_refresh_token(request.refreshToken)
+            jti = payload["jti"]
+        except Exception:
+            # If token is invalid, consider it already logged out
+            return
+        
+        # Revoke token
+        await self.refresh_repo.revoke(jti)
     
     async def get_current_user(self, user_id: str) -> UserOut:
         """Get current user information."""
@@ -194,23 +209,22 @@ class AuthService:
                 detail="User not found"
             )
         
-        return self.user_repo.to_public(user)
+        return user.to_public()
     
-    async def forgot_password(self, request: ForgotPasswordRequest) -> None:
+    async def forgot_password(self, request: ForgotPasswordRequest) -> dict:
         """Send password reset email."""
-        # Find user (don't reveal if email exists)
         user = await self.user_repo.find_by_email(request.email)
         if not user:
-            # Return success even if user doesn't exist (security)
-            return
+            # Don't reveal if email exists
+            return {"message": "If the email exists, a reset link has been sent"}
         
         # Generate reset token
-        reset_token = random_token()
+        reset_token = random_token(32)
         token_hash = sha256_hex(reset_token)
-        expires_at = datetime.utcnow() + timedelta(seconds=settings.reset_token_lifetime_seconds)
+        expires_at = datetime.utcnow() + timedelta(minutes=settings.reset_token_expires_min)
         
         # Store reset token
-        await self.reset_repo.save_reset_token(
+        await self.reset_repo.save(
             user_id=str(user.id),
             token_hash=token_hash,
             expires_at=expires_at
@@ -218,27 +232,40 @@ class AuthService:
         
         # Send email
         reset_link = f"{settings.app_url}/reset?token={reset_token}"
-        await email_service.send_reset_email(request.email, reset_link)
-    
-    async def reset_password(self, request: ResetPasswordRequest) -> None:
-        """Reset user password."""
-        # Find and delete valid reset token
-        token_hash = sha256_hex(request.token)
-        user_id = await self.reset_repo.find_and_delete_if_valid(token_hash)
+        await email_service.send_reset_email(user.email, reset_link)
         
-        if not user_id:
+        return {"message": "If the email exists, a reset link has been sent"}
+    
+    async def reset_password(self, request: ResetPasswordRequest) -> dict:
+        """Reset user password."""
+        # Hash the provided token
+        token_hash = sha256_hex(request.token)
+        
+        # Consume the token if valid
+        reset_token = await self.reset_repo.consume_if_valid(
+            token_hash=token_hash,
+            now=datetime.utcnow()
+        )
+        
+        if not reset_token:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid or expired reset token"
             )
         
         # Update password
-        success = await self.user_repo.update_password(user_id, request.newPassword)
+        success = await self.user_repo.update_password(
+            user_id=reset_token.user_id,
+            new_password=request.newPassword
+        )
+        
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update password"
             )
         
-        # Revoke all refresh tokens for user
-        await self.token_repo.revoke_all_for_user(user_id)
+        # Revoke all refresh tokens for this user
+        await self.refresh_repo.revoke_all_for_user(reset_token.user_id)
+        
+        return {"message": "Password updated successfully"}

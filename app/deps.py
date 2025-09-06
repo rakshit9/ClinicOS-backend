@@ -1,30 +1,38 @@
-"""Common dependencies."""
+"""FastAPI dependencies."""
 
-from typing import Dict, Optional
+from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from fastapi import Depends, Header, HTTPException, status
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_database
-from app.services.auth_service import AuthService
+from app.db import get_session
+from app.models.user import User
+from app.repositories.user_repo import UserRepository
 from app.services.jwt_service import verify_access_token
-from app.utils.responses import error
 
-
-# Rate limiter
+# Rate limiters
 limiter = Limiter(key_func=get_remote_address)
 
-# Auth-specific rate limiter (stricter limits)
-auth_limiter = Limiter(key_func=get_remote_address)
+# Global rate limiter
+global_limiter = limiter.shared_limit(
+    "100/15 minutes",
+    scope="global"
+)
+
+# Auth-specific rate limiter
+auth_limiter = limiter.shared_limit(
+    "10/minute",
+    scope="auth"
+)
 
 
 async def get_current_user(
-    request: Request,
-    authorization: Optional[str] = None
-) -> Dict[str, str]:
+    session: Annotated[AsyncSession, Depends(get_session)],
+    authorization: Annotated[str | None, Header()] = None
+) -> User:
     """Get current authenticated user."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -37,40 +45,19 @@ async def get_current_user(
     try:
         payload = verify_access_token(token)
         user_id = payload["sub"]
-        
-        # Get database and auth service
-        db = await get_database()
-        auth_service = AuthService(db)
-        
-        # Get user info
-        user = await auth_service.get_current_user(user_id)
-        return {
-            "id": user.id,
-            "email": user.email,
-            "name": user.name,
-            "role": user.role
-        }
-        
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
+            detail="Invalid access token"
         )
-
-
-async def get_auth_service(db: AsyncIOMotorDatabase = Depends(get_database)) -> AuthService:
-    """Get authentication service."""
-    return AuthService(db)
-
-
-def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
-    """Custom rate limit exceeded handler."""
-    return error(
-        message="Rate limit exceeded",
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        code="RATE_LIMIT_EXCEEDED",
-        details={
-            "retry_after": exc.retry_after,
-            "limit": exc.detail
-        }
-    )
+    
+    user_repo = UserRepository(session)
+    user = await user_repo.get_by_id(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+    
+    return user

@@ -28,12 +28,12 @@ class EmailService:
     
     async def send_reset_email(self, email: str, reset_link: str) -> bool:
         """Send password reset email."""
+        # If no SMTP credentials, log to console (development mode)
+        if not settings.mail_username or not settings.mail_password:
+            logger.info(f"📧 Password reset link for {email}: {reset_link}")
+            return True
+        
         try:
-            # If no email credentials, log to console (dev mode)
-            if not settings.mail_username or not settings.mail_password:
-                logger.info(f"Password reset link for {email}: {reset_link}")
-                return True
-            
             message = MessageSchema(
                 subject="Password Reset - Clinic Auth",
                 recipients=[email],
@@ -41,7 +41,7 @@ class EmailService:
                 <h2>Password Reset Request</h2>
                 <p>You requested a password reset for your account.</p>
                 <p>Click the link below to reset your password:</p>
-                <p><a href="{reset_link}">Reset Password</a></p>
+                <p><a href="{reset_link}">{reset_link}</a></p>
                 <p>This link will expire in {settings.reset_token_expires_min} minutes.</p>
                 <p>If you didn't request this, please ignore this email.</p>
                 """,
@@ -49,12 +49,14 @@ class EmailService:
             )
             
             await self.fastmail.send_message(message)
-            logger.info(f"Password reset email sent to {email}")
+            logger.info(f"📧 Password reset email sent to {email}")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to send reset email to {email}: {e}")
-            return False
+            logger.error(f"❌ Failed to send email to {email}: {e}")
+            # Fallback to console logging
+            logger.info(f"📧 Password reset link for {email}: {reset_link}")
+            return True
 
 
 # Global email service instance

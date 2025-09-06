@@ -1,111 +1,84 @@
 """User repository for database operations."""
 
-from datetime import datetime
 from typing import Optional
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from pymongo.errors import DuplicateKeyError
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import UserCreate, UserInDB, UserOut, UserUpdate
+from app.models.user import User, UserCreate, UserUpdate
 from app.services.crypto_service import hash_password
 
 
 class UserRepository:
     """User repository for database operations."""
     
-    def __init__(self, db: AsyncIOMotorDatabase):
+    def __init__(self, session: AsyncSession):
         """Initialize user repository."""
-        self.db = db
-        self.collection = db.users
+        self.session = session
     
-    async def create_user(self, user_data: UserCreate) -> UserInDB:
+    async def create_user(self, user_data: UserCreate) -> User:
         """Create a new user."""
-        user_doc = UserInDB(
+        user = User(
             email=user_data.email.lower().strip(),
             password_hash=hash_password(user_data.password),
             name=user_data.name.strip(),
             role=user_data.role,
-            verified=False,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            verified=False
         )
         
         try:
-            result = await self.collection.insert_one(user_doc.model_dump(by_alias=True, exclude={"id"}))
-            user_doc.id = str(result.inserted_id)
-            return user_doc
-        except DuplicateKeyError:
-            raise ValueError("User with this email already exists")
+            self.session.add(user)
+            await self.session.flush()  # Get the ID without committing
+            return user
+        except IntegrityError as e:
+            if "uq_users_email" in str(e):
+                raise ValueError("User with this email already exists")
+            raise
     
-    async def find_by_email(self, email: str) -> Optional[UserInDB]:
+    async def find_by_email(self, email: str) -> Optional[User]:
         """Find user by email."""
-        doc = await self.collection.find_one({"email": email.lower().strip()})
-        if doc:
-            doc["_id"] = str(doc["_id"])
-            return UserInDB(**doc)
-        return None
+        result = await self.session.execute(
+            select(User).where(User.email == email.lower().strip())
+        )
+        return result.scalar_one_or_none()
     
-    async def get_by_id(self, user_id: str) -> Optional[UserInDB]:
+    async def get_by_id(self, user_id: str) -> Optional[User]:
         """Get user by ID."""
-        from bson import ObjectId
-        try:
-            doc = await self.collection.find_one({"_id": ObjectId(user_id)})
-            if doc:
-                doc["_id"] = str(doc["_id"])
-                return UserInDB(**doc)
-            return None
-        except Exception:
-            return None
+        result = await self.session.execute(
+            select(User).where(User.id == user_id)
+        )
+        return result.scalar_one_or_none()
     
-    async def update_user(self, user_id: str, update_data: UserUpdate) -> Optional[UserInDB]:
+    async def update_user(self, user_id: str, update_data: UserUpdate) -> Optional[User]:
         """Update user information."""
-        from bson import ObjectId
+        user = await self.get_by_id(user_id)
+        if not user:
+            return None
         
         update_dict = update_data.model_dump(exclude_unset=True)
         if not update_dict:
-            return await self.get_by_id(user_id)
+            return user
         
-        update_dict["updated_at"] = datetime.utcnow()
+        for field, value in update_dict.items():
+            setattr(user, field, value)
         
-        try:
-            result = await self.collection.update_one(
-                {"_id": ObjectId(user_id)},
-                {"$set": update_dict}
-            )
-            
-            if result.modified_count:
-                return await self.get_by_id(user_id)
-            return None
-        except Exception:
-            return None
+        await self.session.flush()
+        return user
     
     async def update_password(self, user_id: str, new_password: str) -> bool:
         """Update user password."""
-        from bson import ObjectId
-        
-        password_hash = hash_password(new_password)
-        
-        try:
-            result = await self.collection.update_one(
-                {"_id": ObjectId(user_id)},
-                {
-                    "$set": {
-                        "password_hash": password_hash,
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-            return result.modified_count > 0
-        except Exception:
+        user = await self.get_by_id(user_id)
+        if not user:
             return False
+        
+        user.password_hash = hash_password(new_password)
+        await self.session.flush()
+        return True
     
-    def to_public(self, user: UserInDB) -> UserOut:
-        """Convert user to public format."""
-        return UserOut(
-            id=str(user.id),
-            email=user.email,
-            name=user.name,
-            role=user.role,
-            verified=user.verified,
-            created_at=user.created_at
+    async def exists_email(self, email: str) -> bool:
+        """Check if email exists."""
+        result = await self.session.execute(
+            select(User.id).where(User.email == email.lower().strip())
         )
+        return result.scalar_one_or_none() is not None

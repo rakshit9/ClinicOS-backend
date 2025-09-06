@@ -1,104 +1,122 @@
 """Authentication routes."""
 
-from typing import Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.deps import auth_limiter, get_auth_service, get_current_user
+from app.deps import auth_limiter, get_current_user, global_limiter
+from app.db import get_session
+from app.models.user import User
 from app.schemas.auth import (
     AuthResponse,
     ForgotPasswordRequest,
     LoginRequest,
     LogoutRequest,
-    MessageResponse,
-    RefreshRequest,
     RegisterRequest,
     ResetPasswordRequest,
+    TokensResponse,
 )
-from app.schemas.user import UserOut
 from app.services.auth_service import AuthService
 from app.utils.responses import created, no_content, ok
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
+# Rate limiter instance
+limiter = Limiter(key_func=get_remote_address)
+
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+@global_limiter
 async def register(
-    request: RegisterRequest,
-    auth_service: AuthService = Depends(get_auth_service)
+    request: Request,
+    register_data: RegisterRequest,
+    session: Annotated[AsyncSession, Depends(get_session)]
 ):
     """Register a new user."""
-    result = await auth_service.register(request)
-    return created(data=result.model_dump())
+    auth_service = AuthService(session)
+    result = await auth_service.register(register_data)
+    return result
 
 
 @router.post("/login", response_model=AuthResponse)
-@auth_limiter.limit("10/minute")
+@auth_limiter
 async def login(
-    request: LoginRequest,
-    req: Request,
-    user_agent: Optional[str] = Header(None),
-    x_forwarded_for: Optional[str] = Header(None),
-    auth_service: AuthService = Depends(get_auth_service)
+    request: Request,
+    login_data: LoginRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    user_agent: Annotated[str | None, Header()] = None,
+    x_forwarded_for: Annotated[str | None, Header()] = None
 ):
     """Login user."""
-    # Get client IP
-    ip_address = x_forwarded_for.split(",")[0].strip() if x_forwarded_for else get_remote_address(req)
+    auth_service = AuthService(session)
     
-    result = await auth_service.login(
-        request=request,
-        user_agent=user_agent,
-        ip_address=ip_address
-    )
-    return ok(data=result.model_dump())
+    # Get client IP
+    ip = x_forwarded_for.split(",")[0].strip() if x_forwarded_for else None
+    
+    result = await auth_service.login(login_data, user_agent, ip)
+    return result
 
 
-@router.post("/refresh", response_model=AuthResponse)
+@router.post("/refresh", response_model=TokensResponse)
+@global_limiter
 async def refresh(
-    request: RefreshRequest,
-    auth_service: AuthService = Depends(get_auth_service)
+    request: Request,
+    refresh_data: LogoutRequest,
+    session: Annotated[AsyncSession, Depends(get_session)]
 ):
     """Refresh access token."""
-    result = await auth_service.refresh(request)
-    return ok(data=result.model_dump())
+    auth_service = AuthService(session)
+    result = await auth_service.refresh(refresh_data)
+    return result
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@global_limiter
 async def logout(
-    request: LogoutRequest,
-    auth_service: AuthService = Depends(get_auth_service)
+    request: Request,
+    logout_data: LogoutRequest,
+    session: Annotated[AsyncSession, Depends(get_session)]
 ):
     """Logout user."""
-    await auth_service.logout(request)
+    auth_service = AuthService(session)
+    await auth_service.logout(logout_data)
     return no_content()
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me")
+@global_limiter
 async def get_me(
-    current_user: dict = Depends(get_current_user)
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)]
 ):
     """Get current user information."""
-    return ok(data=current_user)
+    return current_user.to_public()
 
 
-@router.post("/forgot-password", response_model=MessageResponse)
-@auth_limiter.limit("10/minute")
+@router.post("/forgot-password")
+@auth_limiter
 async def forgot_password(
-    request: ForgotPasswordRequest,
-    auth_service: AuthService = Depends(get_auth_service)
+    request: Request,
+    forgot_data: ForgotPasswordRequest,
+    session: Annotated[AsyncSession, Depends(get_session)]
 ):
     """Send password reset email."""
-    await auth_service.forgot_password(request)
-    return ok(data={"message": "If the email exists, a reset link has been sent"})
+    auth_service = AuthService(session)
+    result = await auth_service.forgot_password(forgot_data)
+    return result
 
 
-@router.post("/reset-password", response_model=MessageResponse)
+@router.post("/reset-password")
+@global_limiter
 async def reset_password(
-    request: ResetPasswordRequest,
-    auth_service: AuthService = Depends(get_auth_service)
+    request: Request,
+    reset_data: ResetPasswordRequest,
+    session: Annotated[AsyncSession, Depends(get_session)]
 ):
     """Reset user password."""
-    await auth_service.reset_password(request)
-    return ok(data={"message": "Password has been reset successfully"})
+    auth_service = AuthService(session)
+    result = await auth_service.reset_password(reset_data)
+    return result

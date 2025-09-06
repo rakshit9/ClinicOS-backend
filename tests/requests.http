@@ -1,36 +1,49 @@
-### Register
-POST http://localhost:8000/api/auth/register
+### Clinic Auth API Test Requests
+
+### Variables
+@baseUrl = http://localhost:8000
+@accessToken = {{login.response.body.tokens.access}}
+@refreshToken = {{login.response.body.tokens.refresh}}
+
+### Health Check
+GET {{baseUrl}}/health
+
+### Register User
+# @name register
+POST {{baseUrl}}/api/auth/register
 Content-Type: application/json
 
 {
-  "name": "Dr Jane Smith",
+  "name": "Dr. Jane Smith",
+  "email": "jane@example.com",
+  "password": "Str0ng!Pass123",
+  "role": "doctor"
+}
+
+### Login User
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
   "email": "jane@example.com",
   "password": "Str0ng!Pass123"
 }
 
-### Login
-POST http://localhost:8000/api/auth/login
-Content-Type: application/json
-
-{
-  "email": "jane@example.com",
-  "password": "Str0ng!Pass123"
-}
-
-### Me (requires Bearer token)
-GET http://localhost:8000/api/auth/me
-Authorization: Bearer {{access_token}}
+### Get Current User
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{accessToken}}
 
 ### Refresh Token
-POST http://localhost:8000/api/auth/refresh
+POST {{baseUrl}}/api/auth/refresh
 Content-Type: application/json
 
 {
-  "refreshToken": "{{refresh_token}}"
+  "refreshToken": "{{refreshToken}}"
 }
 
 ### Forgot Password
-POST http://localhost:8000/api/auth/forgot-password
+POST {{baseUrl}}/api/auth/forgot-password
 Content-Type: application/json
 
 {
@@ -38,24 +51,38 @@ Content-Type: application/json
 }
 
 ### Reset Password (use token from email)
-POST http://localhost:8000/api/auth/reset-password
+POST {{baseUrl}}/api/auth/reset-password
 Content-Type: application/json
 
 {
-  "token": "{{reset_token}}",
+  "token": "your_reset_token_here",
   "newPassword": "N3w!StrongPass456"
 }
 
 ### Logout
-POST http://localhost:8000/api/auth/logout
+POST {{baseUrl}}/api/auth/logout
 Content-Type: application/json
 
 {
-  "refreshToken": "{{refresh_token}}"
+  "refreshToken": "{{refreshToken}}"
 }
 
-### Health Check
-GET http://localhost:8000/health
+### Register Admin User
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
 
-### Health Check (HEAD)
-HEAD http://localhost:8000/health
+{
+  "name": "Admin User",
+  "email": "admin@example.com",
+  "password": "Admin!Pass123",
+  "role": "admin"
+}
+
+### Test Rate Limiting (run multiple times quickly)
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "jane@example.com",
+  "password": "wrong_password"
+}

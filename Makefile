@@ -1,62 +1,53 @@
-.PHONY: help install dev start stop clean test lint format check
+# Clinic Auth API Makefile
+
+.PHONY: help install dev test lint format clean run build
 
 # Default target
 help:
 	@echo "Available commands:"
-	@echo "  install     - Install dependencies"
-	@echo "  dev         - Start development server"
-	@echo "  start       - Start production server"
-	@echo "  stop        - Stop all services"
-	@echo "  clean       - Clean up containers and volumes"
-	@echo "  test        - Run tests"
-	@echo "  lint        - Run linting"
-	@echo "  format      - Format code"
-	@echo "  check       - Run all checks (lint + format)"
+	@echo "  install    - Install dependencies"
+	@echo "  dev        - Run development server"
+	@echo "  test       - Run tests"
+	@echo "  lint       - Run linting"
+	@echo "  format     - Format code"
+	@echo "  clean      - Clean up temporary files"
+	@echo "  run        - Run production server"
+	@echo "  build      - Build Docker image"
 
 # Install dependencies
 install:
 	pip install -r requirements.txt
 
-# Development server
+# Run development server
 dev:
 	uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# Production server
-start:
-	uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-# Start database services
-db-up:
-	docker-compose up -d mongodb mongo-express
-
-# Stop all services
-stop:
-	docker-compose down
-
-# Clean up everything
-clean:
-	docker-compose down -v --remove-orphans
-	docker system prune -f
 
 # Run tests
 test:
 	python -m pytest tests/ -v
 
-# Lint code
+# Run linting
 lint:
-	ruff check app/ tests/
+	ruff check app/
 	mypy app/
 
 # Format code
 format:
-	black app/ tests/
-	isort app/ tests/
+	black app/
+	isort app/
 
-# Run all checks
-check: lint format
+# Clean up temporary files
+clean:
+	find . -type f -name "*.pyc" -delete
+	find . -type d -name "__pycache__" -delete
+	find . -type d -name "*.egg-info" -exec rm -rf {} +
+	rm -rf .pytest_cache/
+	rm -rf .mypy_cache/
 
-# Setup development environment
-setup: install db-up
-	@echo "✅ Development environment ready!"
-	@echo "📝 Copy env.example to .env and update configuration"
-	@echo "🚀 Run 'make dev' to start the development server"
+# Run production server
+run:
+	uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Build Docker image
+build:
+	docker build -t clinic-auth-api .

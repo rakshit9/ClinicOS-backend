@@ -2,7 +2,7 @@
 
 import hashlib
 import secrets
-from typing import Optional
+from typing import Union
 
 from passlib.context import CryptContext
 
@@ -25,6 +25,8 @@ def random_token(bytes_length: int = 32) -> str:
     return secrets.token_hex(bytes_length)
 
 
-def sha256_hex(data: str) -> str:
-    """Generate SHA256 hash of a string as hex."""
-    return hashlib.sha256(data.encode()).hexdigest()
+def sha256_hex(data: Union[str, bytes]) -> str:
+    """Generate SHA256 hash of data as hex string."""
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    return hashlib.sha256(data).hexdigest()

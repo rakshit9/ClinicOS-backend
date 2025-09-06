@@ -1,49 +1,74 @@
-"""Password reset token repository for database operations."""
+"""Reset token repository for database operations."""
 
 from datetime import datetime
 from typing import Optional
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.token import ResetTokenInDB
+from app.models.reset_token import ResetToken
 
 
-class ResetRepository:
-    """Password reset token repository for database operations."""
+class ResetTokenRepository:
+    """Reset token repository for database operations."""
     
-    def __init__(self, db: AsyncIOMotorDatabase):
-        """Initialize reset repository."""
-        self.db = db
-        self.collection = db.reset_tokens
+    def __init__(self, session: AsyncSession):
+        """Initialize reset token repository."""
+        self.session = session
     
-    async def save_reset_token(
+    async def save(
         self,
         user_id: str,
         token_hash: str,
         expires_at: datetime
-    ) -> ResetTokenInDB:
-        """Save a password reset token."""
-        reset_doc = ResetTokenInDB(
+    ) -> ResetToken:
+        """Save a new reset token."""
+        reset_token = ResetToken(
             user_id=user_id,
             token_hash=token_hash,
-            expires_at=expires_at,
-            created_at=datetime.utcnow()
+            expires_at=expires_at
         )
         
-        result = await self.collection.insert_one(
-            reset_doc.model_dump(by_alias=True, exclude={"id"})
-        )
-        reset_doc.id = str(result.inserted_id)
-        return reset_doc
+        self.session.add(reset_token)
+        await self.session.flush()
+        return reset_token
     
-    async def find_and_delete_if_valid(self, token_hash: str) -> Optional[str]:
-        """Find and atomically delete a valid reset token, returning user_id."""
-        # Use findOneAndDelete for atomic operation
-        doc = await self.collection.find_one_and_delete({
-            "token_hash": token_hash,
-            "expires_at": {"$gt": datetime.utcnow()}
-        })
+    async def consume_if_valid(
+        self,
+        token_hash: str,
+        now: datetime
+    ) -> Optional[ResetToken]:
+        """Consume a reset token if valid (atomic operation)."""
+        # Find the token
+        result = await self.session.execute(
+            select(ResetToken).where(
+                ResetToken.token_hash == token_hash,
+                ResetToken.expires_at > now
+            )
+        )
+        token = result.scalar_one_or_none()
         
-        if doc:
-            return doc.get("user_id")
+        if token:
+            # Delete the token (consume it)
+            await self.session.delete(token)
+            await self.session.flush()
+            return token
+        
         return None
+    
+    async def cleanup_expired(self, now: datetime) -> int:
+        """Clean up expired reset tokens."""
+        result = await self.session.execute(
+            select(ResetToken).where(ResetToken.expires_at <= now)
+        )
+        expired_tokens = result.scalars().all()
+        
+        count = 0
+        for token in expired_tokens:
+            await self.session.delete(token)
+            count += 1
+        
+        if count > 0:
+            await self.session.flush()
+        
+        return count

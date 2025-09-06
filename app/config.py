@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     
     # Database
-    mongo_uri: str = Field(alias="MONGO_URI")
+    database_url: str = Field(alias="DATABASE_URL")
     
     # JWT settings
     jwt_access_secret: str = Field(alias="JWT_ACCESS_SECRET")
@@ -47,42 +47,50 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in v.split(",")]
         return v
     
-    @property
-    def jwt_access_lifetime_seconds(self) -> int:
-        """Convert JWT access expires string to seconds."""
-        return self._parse_duration(self.jwt_access_expires)
+    @field_validator("jwt_access_expires", mode="after")
+    @classmethod
+    def parse_jwt_access_expires(cls, v):
+        """Parse JWT access token expiration."""
+        return cls._parse_duration(v)
     
-    @property
-    def jwt_refresh_lifetime_seconds(self) -> int:
-        """Convert JWT refresh expires string to seconds."""
-        return self._parse_duration(self.jwt_refresh_expires)
+    @field_validator("jwt_refresh_expires", mode="after")
+    @classmethod
+    def parse_jwt_refresh_expires(cls, v):
+        """Parse JWT refresh token expiration."""
+        return cls._parse_duration(v)
     
-    @property
-    def reset_token_lifetime_seconds(self) -> int:
-        """Convert reset token expires minutes to seconds."""
-        return self.reset_token_expires_min * 60
-    
-    def _parse_duration(self, duration: str) -> int:
-        """Parse duration string (e.g., '15m', '7d') to seconds."""
-        if not duration:
-            return 0
+    @staticmethod
+    def _parse_duration(duration_str: str) -> int:
+        """Parse duration string to seconds."""
+        if not duration_str:
+            return 900  # 15 minutes default
         
-        # Match pattern: number followed by unit
-        match = re.match(r"^(\d+)([smhd])$", duration.lower())
+        # Match patterns like "15m", "7d", "1h", "30s"
+        match = re.match(r'^(\d+)([smhd])$', duration_str.lower())
         if not match:
-            raise ValueError(f"Invalid duration format: {duration}")
+            raise ValueError(f"Invalid duration format: {duration_str}")
         
         value, unit = match.groups()
         value = int(value)
         
         multipliers = {
-            "s": 1,
-            "m": 60,
-            "h": 3600,
-            "d": 86400,
+            's': 1,
+            'm': 60,
+            'h': 3600,
+            'd': 86400
         }
         
         return value * multipliers[unit]
+    
+    @property
+    def jwt_access_expires_seconds(self) -> int:
+        """Get JWT access token expiration in seconds."""
+        return self.jwt_access_expires
+    
+    @property
+    def jwt_refresh_expires_seconds(self) -> int:
+        """Get JWT refresh token expiration in seconds."""
+        return self.jwt_refresh_expires
     
     class Config:
         env_file = ".env"
